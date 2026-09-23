@@ -15,7 +15,9 @@ name: Firmware at GHA
 # Manual builds:
 #   - Can optionally create a GitHub prerelease
 #
-# This fork does NOT upload firmware or INI files to rusEFI servers.
+# IMPORTANT:
+#   - This fork does NOT upload firmware to rusEFI servers.
+#   - This fork does NOT upload INI files to rusEFI servers.
 #
 
 on:
@@ -42,6 +44,7 @@ on:
 
 permissions:
   contents: write
+
 
 jobs:
 
@@ -82,19 +85,11 @@ jobs:
           cp ./firmware/ext/openblt/Host/libopenblt.so deliver/
           cp ./misc/libopenblt_jni/build/libopenblt_jni.so deliver/
 
-#      - uses: actions/upload-artifact@v7
-#        if: 0
-#        with:
-#          name: libopenblt-linux
-#          path: |
-#            ./deliver/libopenblt.so
-#            ./deliver/libopenblt_jni.so
-
 
   #
   # Prepare GitHub release
   #
-  # No rusEFI server uploads happen here.
+  # This job NEVER uploads to rusEFI servers.
   #
   release:
     runs-on: ubuntu-latest
@@ -156,6 +151,10 @@ jobs:
             "${{ github.sha }}" \
             changelog.md
 
+      #
+      # Create the empty release first.
+      # Firmware jobs attach their bundles afterward.
+      #
       - name: Create Release
         if: ${{ env.upload == 'release' }}
         uses: ncipollo/release-action@v1.21.0
@@ -169,7 +168,7 @@ jobs:
 
 
   #
-  # Generate the firmware build matrix
+  # Generate firmware build matrix
   #
   generate-matrix:
     runs-on: ubuntu-latest
@@ -184,6 +183,7 @@ jobs:
       - name: Set matrix
         id: set-matrix
         working-directory: firmware
+        shell: bash
         run: |
           export EVENT_NAME="${{ github.event_name }}"
           export RUN_ATTEMPT="${{ github.run_attempt }}"
@@ -195,20 +195,48 @@ jobs:
           export COMMIT_MESSAGE
 
           #
-          # Let rusEFI generate its normal complete matrix first.
+          # Run rusEFI's normal matrix generator.
           #
-          MATRIX=$(bash bin/generate_matrix.sh config/boards)
+          # The generator writes the matrix to stdout.
+          #
+          set +e
+          MATRIX_RAW=$(bash bin/generate_matrix.sh config/boards)
+          GENERATOR_RC=$?
+          set -e
+
+          echo "generate_matrix.sh exit code: $GENERATOR_RC"
 
           #
-          # Keep ONLY Proteus targets.
+          # We still use the generated output if the script returned
+          # a non-zero code but produced a matrix.
           #
-          # Examples:
-          #   proteus_f4
-          #   proteus_f7
-          #   proteus_f4_hardware_QC_special_build
-          #   proteus_f7_hardware_QC_special_build
+          if [ "$GENERATOR_RC" -ne 0 ]; then
+            echo "::warning::generate_matrix.sh returned $GENERATOR_RC; continuing with generated matrix output."
+          fi
+
+          echo "Raw matrix:"
+          echo "$MATRIX_RAW"
+
           #
-          MATRIX=$(echo "$MATRIX" | jq -c '
+          # rusEFI's generator emits:
+          #
+          #   ... },
+          #   ]}
+          #
+          # Remove the trailing comma before the closing array.
+          #
+          MATRIX_CLEAN=$(printf '%s' "$MATRIX_RAW" | \
+            sed -E 's/,[[:space:]]*]/]/g')
+
+          #
+          # Validate the cleaned JSON first.
+          #
+          echo "$MATRIX_CLEAN" | jq empty
+
+          #
+          # Keep ONLY Proteus build targets.
+          #
+          MATRIX=$(echo "$MATRIX_CLEAN" | jq -c '
             {
               include: [
                 .include[]
@@ -217,14 +245,21 @@ jobs:
             }
           ')
 
+          echo
           echo "Proteus-only build matrix:"
           echo "$MATRIX"
+          echo
+
+          #
+          # Make absolutely sure the filtered matrix is valid JSON.
+          #
+          echo "$MATRIX" | jq empty
 
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
 
   #
-  # Build firmware
+  # Build Proteus firmware
   #
   build-firmware:
     runs-on: ubuntu-latest
@@ -233,7 +268,7 @@ jobs:
       - release
       - generate-matrix
 
-    if: ${{ ! contains(needs.generate-matrix.outputs.matrix, '[]') }}
+    if: ${{ ! contains(needs.generate-matrix.outputs.matrix, '"include":[]') }}
 
     strategy:
       fail-fast: false
@@ -251,17 +286,10 @@ jobs:
 
 
       #
-      # Set build mode
+      # Determine output mode
       #
       # IMPORTANT:
-      #
-      # There is intentionally NO "server" mode in this fork.
-      #
-      # Scheduled/manual-release build:
-      #   -> GitHub Release
-      #
-      # Everything else:
-      #   -> GitHub Actions artifacts
+      # There is intentionally NO "server" mode.
       #
       - name: Set run condition variables
         env:
@@ -303,7 +331,7 @@ jobs:
 
 
       #
-      # Java
+      # Java environment
       #
       - uses: ./.github/actions/setup-java
 
@@ -318,7 +346,7 @@ jobs:
 
 
       #
-      # Build environment
+      # Build environment variables
       #
       - name: Set Build Env Variables
         env:
@@ -332,7 +360,7 @@ jobs:
 
 
       #
-      # Git status
+      # Git state
       #
       - name: Git Status
         run: |
@@ -381,7 +409,7 @@ jobs:
 
 
       #
-      # Simulator
+      # Simulator build
       #
       - name: Building Windows simulator separately just to make github logs more readable
         working-directory: ./firmware/
@@ -392,7 +420,7 @@ jobs:
 
 
       #
-      # Firmware
+      # Build firmware
       #
       - name: Build Firmware
         working-directory: ./firmware/
@@ -413,7 +441,7 @@ jobs:
 
 
       #
-      # Add bundle to GitHub release
+      # Attach Proteus bundle to GitHub Release
       #
       - name: Add Bundles to Release
         if: ${{ env.upload == 'release' }}
@@ -432,6 +460,7 @@ jobs:
       #
       # Normal GitHub Actions artifacts
       #
+
       - name: elf2text
         if: ${{ env.upload == 'gha_artifact' }}
         working-directory: ./firmware/build
@@ -488,7 +517,7 @@ jobs:
 
 
       #
-      # Bundle artifact
+      # Proteus bundle artifact
       #
       - name: Upload bundle artifact
         if: ${{ env.upload == 'gha_artifact' }}
@@ -514,12 +543,23 @@ jobs:
   #
   # Universal bundle
   #
+  # This is not a board firmware build.
+  # It produces the common rusEFI console/tools bundle.
+  #
   build-universal-bundle:
     runs-on: ubuntu-latest
+
+    needs:
+      - release
 
     steps:
 
       - uses: actions/checkout@v7
+
+      - name: Get current date
+        run: |
+          echo "RELEASE_DATE=$(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
+
 
       - name: Checkout bundle submodules
         run: |
@@ -548,7 +588,7 @@ jobs:
 
 
       #
-      # Normal universal bundle artifact
+      # Normal Actions artifacts
       #
       - name: Upload universal bundle artifact
         if: ${{ github.event_name != 'schedule' && !(github.event_name == 'workflow_dispatch' && inputs.release == true) }}
@@ -569,18 +609,20 @@ jobs:
 
 
       #
-      # Universal bundle to GitHub release
+      # Add universal bundle to the SAME GitHub release
+      # used by the Proteus firmware builds.
       #
       - name: Add universal bundle to Release
         if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.release == true) }}
         uses: ncipollo/release-action@v1.21.0
         with:
-          tag: ${{ github.run_number }}-universal
-          name: "Nightly ${{ github.run_number }}"
+          tag: ${{ env.RELEASE_DATE }}
+          name: "Nightly ${{ env.RELEASE_DATE }}"
           artifacts: |
             ./artifacts/rusefi_bundle_universal.zip
             ./artifacts/rusefi_bundle_universal_autoupdate.zip
           replacesArtifacts: false
           token: ${{ secrets.GITHUB_TOKEN }}
           allowUpdates: true
+          omitBodyDuringUpdate: true
           prerelease: true
