@@ -7,7 +7,7 @@ endif
 
 # see also openblt/board.mk STATUS_LED
 DDEFS += -DLED_CRITICAL_ERROR_BRAIN_PIN=Gpio::E3
-DDEFS += -DFIRMWARE_ID=\"proteus\"
+DDEFS += -DFIRMWARE_ID=\"brick\"
 DDEFS += $(VAR_DEF_ENGINE_TYPE)
 
 
