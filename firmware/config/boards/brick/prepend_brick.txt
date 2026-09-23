@@ -9,4 +9,4 @@
 
 #define CLT_IDLE_TABLE_RPM_SIZE 6
 
-#define BRICK_FORCE_SCATTERED_OUTPUTS TRUE
+CUSTOM_GEN_CONFIG=gen_config_brick.sh
