@@ -3,23 +3,28 @@ name: Firmware at GHA
 #
 # GitHub Actions firmware build for Seth's rusEFI fork.
 #
-# Normal push/manual builds:
-#   - Build Proteus variants
-#   - Build Brick
-#   - Store outputs as GitHub Actions artifacts
+# Builds:
+#   - All Proteus variants
+#   - Brick
 #
-# Scheduled nightly builds:
-#   - Build Proteus variants
-#   - Build Brick
-#   - Create/update a GitHub prerelease
-#   - Attach firmware bundles to that release
+# Normal push / pull request / manual build:
+#   - Build firmware
+#   - Upload results as GitHub Actions artifacts
 #
-# Manual builds:
-#   - Can optionally create a GitHub prerelease
+# Scheduled nightly build:
+#   - Build firmware
+#   - Wait for ALL builds to finish
+#   - Create a GitHub prerelease
+#   - Attach completed firmware bundles
+#
+# Manual release build:
+#   - Same as nightly
+#   - Only when "Create a GitHub prerelease" is checked
 #
 # IMPORTANT:
 #   - This fork does NOT upload firmware to rusEFI servers.
 #   - This fork does NOT upload INI files to rusEFI servers.
+#   - There is intentionally NO "server" upload mode.
 #
 
 on:
@@ -51,6 +56,47 @@ permissions:
 jobs:
 
   #
+  # Determine whether this run should publish a GitHub release.
+  #
+  prepare-release:
+    runs-on: ubuntu-latest
+
+    outputs:
+      publish: ${{ steps.mode.outputs.publish }}
+      tag: ${{ steps.mode.outputs.tag }}
+      name: ${{ steps.mode.outputs.name }}
+
+    steps:
+
+      - name: Determine release mode
+        id: mode
+        shell: bash
+        run: |
+          DATE="$(date +'%Y-%m-%d')"
+
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "tag=nightly-${DATE}" >> "$GITHUB_OUTPUT"
+            echo "name=Nightly ${DATE}" >> "$GITHUB_OUTPUT"
+
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] \
+            && [ "${{ inputs.release }}" = "true" ]; then
+
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "tag=manual-${DATE}-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "name=Test Build ${DATE} #${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+          else
+
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "name=" >> "$GITHUB_OUTPUT"
+
+          fi
+
+
+  #
   # LibOpenBLT host libraries
   #
   build-libopenblt-linux:
@@ -67,106 +113,10 @@ jobs:
         run: |
           cmake -DCMAKE_BUILD_TYPE=Release ..
 
-#      - name: make libopenblt
-#        working-directory: ./firmware/ext/openblt/Host/Source/LibOpenBLT/build
-#        run: make -j8
-
       - name: cmake configure libopenblt_jni
         working-directory: ./misc/libopenblt_jni/build
         run: |
           cmake -DCMAKE_BUILD_TYPE=Release ..
-
-#      - name: make libopenblt_jni
-#        working-directory: ./misc/libopenblt_jni/build
-#        run: make -j8
-
-      - name: coalesce
-        if: 0
-        run: |
-          mkdir deliver
-          cp ./firmware/ext/openblt/Host/libopenblt.so deliver/
-          cp ./misc/libopenblt_jni/build/libopenblt_jni.so deliver/
-
-
-  #
-  # Prepare GitHub release
-  #
-  # This job NEVER uploads to rusEFI servers.
-  #
-  release:
-    runs-on: ubuntu-latest
-
-    steps:
-
-      - name: Dump GitHub context
-        env:
-          GITHUB_CONTEXT: ${{ toJson(github) }}
-        run: |
-          echo "$GITHUB_CONTEXT"
-
-      - name: Set release variables
-        run: |
-          echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
-
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "full=true" >> "$GITHUB_ENV"
-            echo "upload=release" >> "$GITHUB_ENV"
-
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] \
-            && [ "${{ inputs.release }}" = "true" ]; then
-            echo "full=true" >> "$GITHUB_ENV"
-            echo "upload=release" >> "$GITHUB_ENV"
-
-          else
-            echo "full=false" >> "$GITHUB_ENV"
-            echo "upload=gha_artifact" >> "$GITHUB_ENV"
-          fi
-
-      - uses: mukunku/tag-exists-action@v1.7.0
-        id: checkTag
-        with:
-          tag: ${{ env.date }}
-
-      - name: Create Release Tag
-        if: ${{ env.upload == 'release' && steps.checkTag.outputs.exists == 'false' }}
-        id: tag
-        uses: mathieudutour/github-tag-action@v6.2
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          custom_tag: ${{ env.date }}
-          tag_prefix: ''
-
-      - uses: actions/checkout@v7
-        if: ${{ env.upload == 'release' }}
-        with:
-          sparse-checkout: misc/actions
-          sparse-checkout-cone-mode: false
-
-      - name: Generate Changelog
-        if: ${{ env.upload == 'release' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          bash misc/actions/nightly_changelog.sh \
-            "${{ github.repository }}" \
-            "${{ env.date }}" \
-            "${{ github.sha }}" \
-            changelog.md
-
-      #
-      # Create the empty release first.
-      # Firmware jobs attach their bundles afterward.
-      #
-      - name: Create Release
-        if: ${{ env.upload == 'release' }}
-        uses: ncipollo/release-action@v1.21.0
-        with:
-          tag: ${{ env.date }}
-          name: "Nightly ${{ env.date }}"
-          bodyFile: changelog.md
-          token: ${{ secrets.GITHUB_TOKEN }}
-          allowUpdates: true
-          prerelease: true
 
 
   #
@@ -206,10 +156,6 @@ jobs:
 
           echo "generate_matrix.sh exit code: $GENERATOR_RC"
 
-          #
-          # Keep generated output even if the generator returns non-zero
-          # after producing its matrix.
-          #
           if [ "$GENERATOR_RC" -ne 0 ]; then
             echo "::warning::generate_matrix.sh returned $GENERATOR_RC; continuing with generated matrix output."
           fi
@@ -224,7 +170,7 @@ jobs:
             sed -E 's/,[[:space:]]*]/]/g')
 
           #
-          # Validate JSON.
+          # Validate the generated JSON.
           #
           echo "$MATRIX_CLEAN" | jq empty
 
@@ -232,7 +178,7 @@ jobs:
           # Keep:
           #
           #   - every Proteus target
-          #   - exact build target "brick"
+          #   - exact target "brick"
           #
           MATRIX=$(echo "$MATRIX_CLEAN" | jq -c '
             {
@@ -253,7 +199,7 @@ jobs:
           echo
 
           #
-          # Make sure the filtered matrix is valid JSON.
+          # Validate the filtered matrix.
           #
           echo "$MATRIX" | jq empty
 
@@ -267,7 +213,7 @@ jobs:
     runs-on: ubuntu-latest
 
     needs:
-      - release
+      - prepare-release
       - generate-matrix
 
     if: ${{ ! contains(needs.generate-matrix.outputs.matrix, '"include":[]') }}
@@ -282,44 +228,34 @@ jobs:
       # Current date
       #
       - name: Get current date
-        id: date
         run: |
           echo "BUNDLE_DATE=$(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
 
 
       #
-      # Determine output mode
+      # Determine build mode.
       #
-      # IMPORTANT:
-      # There is intentionally NO "server" mode.
+      # There is intentionally NO server mode.
       #
       - name: Set run condition variables
         env:
           GH_REF: ${{ github.ref }}
         run: |
 
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "Creating nightly GitHub release"
+          if [ "${{ needs.prepare-release.outputs.publish }}" = "true" ]; then
+            echo "Release build"
             echo "full=true" >> "$GITHUB_ENV"
             echo "upload=release" >> "$GITHUB_ENV"
-            echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
-
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] \
-            && [ "${{ inputs.release }}" = "true" ]; then
-            echo "Creating manual GitHub release"
-            echo "full=true" >> "$GITHUB_ENV"
-            echo "upload=release" >> "$GITHUB_ENV"
-            echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
 
           else
-            echo "GitHub Actions artifact mode"
+            echo "GitHub Actions artifact build"
             echo "full=false" >> "$GITHUB_ENV"
             echo "upload=gha_artifact" >> "$GITHUB_ENV"
           fi
 
 
       #
-      # Checkout
+      # Checkout source
       #
       - uses: actions/checkout@v7
 
@@ -333,7 +269,7 @@ jobs:
 
 
       #
-      # Java environment
+      # Java
       #
       - uses: ./.github/actions/setup-java
 
@@ -348,7 +284,7 @@ jobs:
 
 
       #
-      # Build environment variables
+      # Build environment
       #
       - name: Set Build Env Variables
         env:
@@ -402,7 +338,7 @@ jobs:
 
 
       #
-      # Check generated config
+      # Config validation
       #
       - name: Check config diff
         working-directory: ./firmware/
@@ -422,7 +358,7 @@ jobs:
 
 
       #
-      # Build firmware
+      # Firmware build
       #
       - name: Build Firmware
         working-directory: ./firmware/
@@ -443,86 +379,12 @@ jobs:
 
 
       #
-      # Attach firmware bundle to GitHub release
+      # ALWAYS save the firmware bundle as an Actions artifact.
       #
-      - name: Add Bundles to Release
-        if: ${{ env.upload == 'release' }}
-        uses: ncipollo/release-action@v1.21.0
-        with:
-          tag: ${{ env.date }}
-          name: "Nightly ${{ env.date }}"
-          artifacts: "artifacts/rusefi_bundle_*.zip"
-          replacesArtifacts: false
-          token: ${{ secrets.GITHUB_TOKEN }}
-          allowUpdates: true
-          omitBodyDuringUpdate: true
-          prerelease: true
-
-
+      # This is important because the final release job downloads
+      # these completed artifacts AFTER every build has succeeded.
       #
-      # Normal GitHub Actions artifacts
-      #
-
-      - name: elf2text
-        if: ${{ env.upload == 'gha_artifact' }}
-        working-directory: ./firmware/build
-        run: |
-          arm-none-eabi-objdump -d rusefi.elf > rusefi.txt
-
-
-      - name: Upload github action text artifact
-        if: ${{ env.upload == 'gha_artifact' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: rusefi_${{ matrix.build-target }}.txt
-          path: ./firmware/build/rusefi.txt
-
-
-      - name: Upload github action elf artifact
-        if: ${{ env.upload == 'gha_artifact' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: rusefi_${{ matrix.build-target }}.elf
-          path: ./firmware/build/rusefi.elf
-
-
-      - name: Upload github action map artifact
-        if: ${{ env.upload == 'gha_artifact' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: rusefi_${{ matrix.build-target }}.map
-          path: ./firmware/build/rusefi.map
-
-
-      - name: Upload github action bin artifact
-        if: ${{ env.upload == 'gha_artifact' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: rusefi_${{ matrix.build-target }}.bin
-          path: ./firmware/deliver/rusefi*.bin
-
-
-      - name: Upload github action hex artifact
-        if: ${{ env.upload == 'gha_artifact' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: rusefi_${{ matrix.build-target }}.hex
-          path: ./firmware/build/rusefi*.hex
-
-
-      - name: Upload github action dfu artifact
-        if: ${{ env.upload == 'gha_artifact' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: rusefi_${{ matrix.build-target }}.dfu
-          path: ./firmware/deliver/rusefi*.dfu
-
-
-      #
-      # Firmware bundle artifact
-      #
-      - name: Upload bundle artifact
-        if: ${{ env.upload == 'gha_artifact' }}
+      - name: Upload firmware bundle
         uses: actions/upload-artifact@v7
         with:
           archive: false
@@ -531,10 +393,9 @@ jobs:
 
 
       #
-      # Autoupdate bundle artifact
+      # Autoupdate bundle
       #
-      - name: Upload github action autoupdate artifact
-        if: ${{ env.upload == 'gha_artifact' }}
+      - name: Upload autoupdate bundle
         uses: actions/upload-artifact@v7
         with:
           archive: false
@@ -542,14 +403,60 @@ jobs:
           path: ./artifacts/rusefi_bundle_${{ matrix.build-target }}_autoupdate.zip
 
 
+      #
+      # Individual build artifacts.
+      #
+      # These remain available on the Actions run for debugging/testing.
+      #
+
+      - name: Create disassembly text
+        run: |
+          arm-none-eabi-objdump \
+            -d ./firmware/build/rusefi.elf \
+            > ./firmware/build/rusefi.txt
+
+      - name: Upload text artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: rusefi_${{ matrix.build-target }}.txt
+          path: ./firmware/build/rusefi.txt
+
+      - name: Upload ELF artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: rusefi_${{ matrix.build-target }}.elf
+          path: ./firmware/build/rusefi.elf
+
+      - name: Upload MAP artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: rusefi_${{ matrix.build-target }}.map
+          path: ./firmware/build/rusefi.map
+
+      - name: Upload BIN artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: rusefi_${{ matrix.build-target }}.bin
+          path: ./firmware/deliver/rusefi*.bin
+
+      - name: Upload HEX artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: rusefi_${{ matrix.build-target }}.hex
+          path: ./firmware/build/rusefi*.hex
+
+      - name: Upload DFU artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: rusefi_${{ matrix.build-target }}.dfu
+          path: ./firmware/deliver/rusefi*.dfu
+
+
   #
-  # Universal bundle
+  # Build universal rusEFI tools bundle.
   #
   build-universal-bundle:
     runs-on: ubuntu-latest
-
-    needs:
-      - release
 
     steps:
 
@@ -587,10 +494,9 @@ jobs:
 
 
       #
-      # Normal Actions artifacts
+      # ALWAYS keep universal bundle as an Actions artifact.
       #
-      - name: Upload universal bundle artifact
-        if: ${{ github.event_name != 'schedule' && !(github.event_name == 'workflow_dispatch' && inputs.release == true) }}
+      - name: Upload universal bundle
         uses: actions/upload-artifact@v7
         with:
           archive: false
@@ -598,8 +504,7 @@ jobs:
           path: ./artifacts/rusefi_bundle_universal.zip
 
 
-      - name: Upload universal autoupdate artifact
-        if: ${{ github.event_name != 'schedule' && !(github.event_name == 'workflow_dispatch' && inputs.release == true) }}
+      - name: Upload universal autoupdate bundle
         uses: actions/upload-artifact@v7
         with:
           archive: false
@@ -607,20 +512,63 @@ jobs:
           path: ./artifacts/rusefi_bundle_universal_autoupdate.zip
 
 
+  #
+  # Publish GitHub Release ONLY AFTER all firmware jobs and
+  # the universal bundle have completed successfully.
+  #
+  publish-release:
+    runs-on: ubuntu-latest
+
+    needs:
+      - prepare-release
+      - build-firmware
+      - build-universal-bundle
+
+    if: ${{ needs.prepare-release.outputs.publish == 'true' }}
+
+    steps:
+
       #
-      # Add universal bundle to the SAME GitHub release
+      # Checkout the repository for commit information.
       #
-      - name: Add universal bundle to Release
-        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.release == true) }}
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+
+      #
+      # Download ONLY bundle artifacts from all successful jobs.
+      #
+      # merge-multiple puts all ZIP files into ./release-assets
+      #
+      - name: Download completed bundle artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: rusefi_bundle_*.zip
+          path: ./release-assets
+          merge-multiple: true
+
+
+      #
+      # Show exactly what we're about to publish.
+      #
+      - name: List release assets
+        run: |
+          echo "Release assets:"
+          find ./release-assets -maxdepth 2 -type f -print | sort
+
+
+      #
+      # Create a release from the COMPLETED build artifacts.
+      #
+      - name: Create GitHub Release
         uses: ncipollo/release-action@v1.21.0
         with:
-          tag: ${{ env.RELEASE_DATE }}
-          name: "Nightly ${{ env.RELEASE_DATE }}"
-          artifacts: |
-            ./artifacts/rusefi_bundle_universal.zip
-            ./artifacts/rusefi_bundle_universal_autoupdate.zip
-          replacesArtifacts: false
+          tag: ${{ needs.prepare-release.outputs.tag }}
+          name: ${{ needs.prepare-release.outputs.name }}
+          artifacts: "./release-assets/*.zip"
+          replacesArtifacts: true
           token: ${{ secrets.GITHUB_TOKEN }}
           allowUpdates: true
-          omitBodyDuringUpdate: true
           prerelease: true
+          generateReleaseNotes: true
