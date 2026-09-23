@@ -2,13 +2,12 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BOARD_DIR="config/boards/brick"
+SHORT_BOARD_NAME="brick"
 
-echo "Generating standard rusEFI configuration for Brick..."
+echo "Generating normal rusEFI configuration for Brick..."
 
-cd "$SCRIPT_DIR/../../.."
-
-bash gen_config_board.sh config/boards/brick brick
+bash gen_config_board.sh "$BOARD_DIR" "$SHORT_BOARD_NAME"
 
 INI="tunerstudio/generated/rusefi_brick.ini"
 
@@ -19,33 +18,61 @@ import sys
 from pathlib import Path
 
 ini = Path(sys.argv[1])
+
+if not ini.exists():
+    raise SystemExit(f"ERROR: Generated INI does not exist: {ini}")
+
 text = ini.read_text()
 
-required = """scatteredOchGetCommand = 9
+settings = """scatteredOchGetCommand = 9
 scatteredOffsetArray = highSpeedOffsets
 scatteredGetEnabled = { 1 }"""
 
-if required in text:
+# Don't add the settings twice.
+if settings in text:
     print("Brick scattered settings already present.")
     raise SystemExit(0)
 
-needle = "ochBlockSize = "
+lines = text.splitlines(keepends=True)
 
-pos = text.find(needle)
+# Find the [OutputChannels] section.
+section_start = None
+section_end = len(lines)
 
-if pos == -1:
-    raise SystemExit("ERROR: Could not find ochBlockSize in Brick INI")
+for i, line in enumerate(lines):
+    if line.strip() == "[OutputChannels]":
+        section_start = i
+        break
 
-line_end = text.find("\n", pos)
+if section_start is None:
+    raise SystemExit("ERROR: [OutputChannels] section not found in Brick INI")
 
-if line_end == -1:
-    line_end = len(text)
+# Find the next INI section.
+for i in range(section_start + 1, len(lines)):
+    stripped = lines[i].strip()
 
-replacement = text[:line_end + 1] + "\n" + required + "\n" + text[line_end + 1:]
+    if stripped.startswith("[") and stripped.endswith("]"):
+        section_end = i
+        break
 
-ini.write_text(replacement)
+# Insert immediately before the next section.
+insertion = (
+    "\n"
+    + settings
+    + "\n\n"
+)
 
-print("Brick scattered settings added.")
+lines.insert(section_end, insertion)
+
+ini.write_text("".join(lines))
+
+print("Brick scattered settings inserted successfully.")
 PY
 
+echo
+echo "Verifying Brick INI..."
+
+grep -A8 -B3 -n "\[OutputChannels\]" "$INI"
+
+echo
 echo "Brick configuration generation complete."
