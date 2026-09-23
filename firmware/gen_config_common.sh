@@ -43,7 +43,7 @@ set_board_file BOARD_VE_FILE "${BOARD_DIR}/board_ve.ini"
 set_board_file BOARD_INJECTION_SETTINGS_FILE "${BOARD_DIR}/board_injection_settings.ini"
 set_board_file BOARD_IGNITION_SETTINGS_FILE "${BOARD_DIR}/board_ignition_settings.ini"
 set_board_file BOARD_FRONT_PAGE_FILE "${BOARD_DIR}/board_front_page.ini"
-
+set_board_file BOARD_OUTPUT_CHANNELS_FILE "${BOARD_DIR}/board_output_channels.ini"
 
 # most static arguments go first
 # reading into VariableRegistry and overrides go next
