@@ -2,6 +2,8 @@
 
 #define LUA_SCRIPT_SIZE 48000
 
+#define BRICK_FORCE_SCATTERED_OUTPUTS true
+
 ! huge buffer for happier remote TCP/IP connector - see also 'blockingFactorOverride' in console source code
 #define CUSTOM_TS_BUFFER_SIZE 32000
 
