@@ -13,13 +13,12 @@ name: Firmware at GHA
 #
 # Scheduled nightly build:
 #   - Build firmware
-#   - Wait for ALL builds to finish
+#   - Wait for ALL firmware builds to finish
 #   - Create a GitHub prerelease
-#   - Attach completed firmware bundles
+#   - Attach ONLY rusefi_bundle_brick.zip
 #
 # Manual release build:
-#   - Same as nightly
-#   - Only when "Create a GitHub prerelease" is checked
+#   - Same behavior when "Create a GitHub prerelease" is checked
 #
 # IMPORTANT:
 #   - This fork does NOT upload firmware to rusEFI servers.
@@ -75,29 +74,28 @@ jobs:
           DATE="$(date +'%Y-%m-%d')"
 
           if [ "${{ github.event_name }}" = "schedule" ]; then
-
             echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "tag=nightly-${DATE}" >> "$GITHUB_OUTPUT"
             echo "name=Nightly ${DATE}" >> "$GITHUB_OUTPUT"
 
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ] \
             && [ "${{ inputs.release }}" = "true" ]; then
-
             echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "tag=manual-${DATE}-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
             echo "name=Test Build ${DATE} #${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
           else
-
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "tag=" >> "$GITHUB_OUTPUT"
             echo "name=" >> "$GITHUB_OUTPUT"
-
           fi
 
 
   #
-  # LibOpenBLT host libraries
+  # LibOpenBLT host libraries.
+  #
+  # This is kept from the original rusEFI workflow.
+  # It does not upload anything to a server.
   #
   build-libopenblt-linux:
     runs-on: ubuntu-latest
@@ -120,7 +118,7 @@ jobs:
 
 
   #
-  # Generate firmware build matrix
+  # Generate firmware build matrix.
   #
   generate-matrix:
     runs-on: ubuntu-latest
@@ -170,13 +168,12 @@ jobs:
             sed -E 's/,[[:space:]]*]/]/g')
 
           #
-          # Validate the generated JSON.
+          # Validate generated JSON.
           #
           echo "$MATRIX_CLEAN" | jq empty
 
           #
           # Keep:
-          #
           #   - every Proteus target
           #   - exact target "brick"
           #
@@ -199,7 +196,7 @@ jobs:
           echo
 
           #
-          # Validate the filtered matrix.
+          # Validate filtered matrix.
           #
           echo "$MATRIX" | jq empty
 
@@ -207,7 +204,7 @@ jobs:
 
 
   #
-  # Build Proteus + Brick firmware
+  # Build Proteus + Brick firmware.
   #
   build-firmware:
     runs-on: ubuntu-latest
@@ -225,7 +222,7 @@ jobs:
     steps:
 
       #
-      # Current date
+      # Current date.
       #
       - name: Get current date
         run: |
@@ -233,13 +230,11 @@ jobs:
 
 
       #
-      # Determine build mode.
+      # Determine output mode.
       #
       # There is intentionally NO server mode.
       #
       - name: Set run condition variables
-        env:
-          GH_REF: ${{ github.ref }}
         run: |
 
           if [ "${{ needs.prepare-release.outputs.publish }}" = "true" ]; then
@@ -255,13 +250,13 @@ jobs:
 
 
       #
-      # Checkout source
+      # Checkout source.
       #
       - uses: actions/checkout@v7
 
 
       #
-      # Submodules
+      # Submodules.
       #
       - name: Checkout Submodules
         run: |
@@ -269,13 +264,13 @@ jobs:
 
 
       #
-      # Java
+      # Java environment.
       #
       - uses: ./.github/actions/setup-java
 
 
       #
-      # Build dependencies
+      # Build dependencies.
       #
       - name: Install multilib, mingw, sshpass and mtools
         run: |
@@ -284,7 +279,7 @@ jobs:
 
 
       #
-      # Build environment
+      # Build environment variables.
       #
       - name: Set Build Env Variables
         env:
@@ -298,7 +293,7 @@ jobs:
 
 
       #
-      # Git state
+      # Git state.
       #
       - name: Git Status
         run: |
@@ -306,7 +301,7 @@ jobs:
 
 
       #
-      # ARM compiler
+      # ARM compiler.
       #
       - name: Acquire Arm GNU Toolchain (arm-none-eabi-gcc)
         uses: carlosperate/arm-none-eabi-gcc-action@v1.13.0
@@ -319,7 +314,7 @@ jobs:
 
 
       #
-      # Clean build
+      # Clean build.
       #
       - name: Clean (Just in Case)
         working-directory: ./firmware/
@@ -328,7 +323,7 @@ jobs:
 
 
       #
-      # Generate configs
+      # Generate configuration.
       #
       - name: Handle configs separately just to make github logs more readable
         working-directory: ./firmware/
@@ -338,7 +333,7 @@ jobs:
 
 
       #
-      # Config validation
+      # Check generated config.
       #
       - name: Check config diff
         working-directory: ./firmware/
@@ -347,7 +342,7 @@ jobs:
 
 
       #
-      # Simulator build
+      # Simulator build.
       #
       - name: Building Windows simulator separately just to make github logs more readable
         working-directory: ./firmware/
@@ -358,7 +353,7 @@ jobs:
 
 
       #
-      # Firmware build
+      # Build firmware.
       #
       - name: Build Firmware
         working-directory: ./firmware/
@@ -370,7 +365,7 @@ jobs:
 
 
       #
-      # Validation
+      # Validation.
       #
       - name: Check for illegal time conversions
         working-directory: ./firmware/
@@ -379,10 +374,9 @@ jobs:
 
 
       #
-      # ALWAYS save the firmware bundle as an Actions artifact.
+      # ALWAYS upload bundle as an Actions artifact.
       #
-      # This is important because the final release job downloads
-      # these completed artifacts AFTER every build has succeeded.
+      # The release job will later select ONLY brick.
       #
       - name: Upload firmware bundle
         uses: actions/upload-artifact@v7
@@ -393,7 +387,7 @@ jobs:
 
 
       #
-      # Autoupdate bundle
+      # Autoupdate bundle.
       #
       - name: Upload autoupdate bundle
         uses: actions/upload-artifact@v7
@@ -406,8 +400,6 @@ jobs:
       #
       # Individual build artifacts.
       #
-      # These remain available on the Actions run for debugging/testing.
-      #
 
       - name: Create disassembly text
         run: |
@@ -415,11 +407,13 @@ jobs:
             -d ./firmware/build/rusefi.elf \
             > ./firmware/build/rusefi.txt
 
+
       - name: Upload text artifact
         uses: actions/upload-artifact@v7
         with:
           name: rusefi_${{ matrix.build-target }}.txt
           path: ./firmware/build/rusefi.txt
+
 
       - name: Upload ELF artifact
         uses: actions/upload-artifact@v7
@@ -427,11 +421,13 @@ jobs:
           name: rusefi_${{ matrix.build-target }}.elf
           path: ./firmware/build/rusefi.elf
 
+
       - name: Upload MAP artifact
         uses: actions/upload-artifact@v7
         with:
           name: rusefi_${{ matrix.build-target }}.map
           path: ./firmware/build/rusefi.map
+
 
       - name: Upload BIN artifact
         uses: actions/upload-artifact@v7
@@ -439,11 +435,13 @@ jobs:
           name: rusefi_${{ matrix.build-target }}.bin
           path: ./firmware/deliver/rusefi*.bin
 
+
       - name: Upload HEX artifact
         uses: actions/upload-artifact@v7
         with:
           name: rusefi_${{ matrix.build-target }}.hex
           path: ./firmware/build/rusefi*.hex
+
 
       - name: Upload DFU artifact
         uses: actions/upload-artifact@v7
@@ -453,68 +451,16 @@ jobs:
 
 
   #
-  # Build universal rusEFI tools bundle.
+  # Publish GitHub Release.
   #
-  build-universal-bundle:
-    runs-on: ubuntu-latest
-
-    steps:
-
-      - uses: actions/checkout@v7
-
-      - name: Get current date
-        run: |
-          echo "RELEASE_DATE=$(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
-
-
-      - name: Checkout bundle submodules
-        run: |
-          git submodule update --init --depth=1 \
-            firmware/ext/rusefi-gha \
-            java_console/luaformatter \
-            java_console/peak-can-basic
-
-
-      - uses: ./.github/actions/setup-java
-
-
-      - name: Build console jar
-        run: |
-          ./gradlew :ui:shadowJar :ts_plugin_launcher:shadowJar
-
-
-      - name: Assemble universal bundle
-        run: |
-          mkdir -p artifacts
-
-          WHITE_LABEL=rusefi \
-            bash firmware/bin/assemble_universal_bundle.sh \
-            ./artifacts \
-            universal
-
-
-      #
-      # ALWAYS keep universal bundle as an Actions artifact.
-      #
-      - name: Upload universal bundle
-        uses: actions/upload-artifact@v7
-        with:
-          archive: false
-          name: rusefi_bundle_universal.zip
-          path: ./artifacts/rusefi_bundle_universal.zip
-
-
-      - name: Upload universal autoupdate bundle
-        uses: actions/upload-artifact@v7
-        with:
-          archive: false
-          name: rusefi_bundle_universal_autoupdate.zip
-          path: ./artifacts/rusefi_bundle_universal_autoupdate.zip
-
-
+  # IMPORTANT:
+  # This job waits for the COMPLETE firmware matrix.
   #
-  # Publish GitHub Release ONLY AFTER all firmware jobs and
-  # the universal bundle have completed successfully.
+  # It downloads ONLY:
+  #
+  #     rusefi_bundle_brick.zip
+  #
+  # and publishes ONLY that ZIP.
   #
   publish-release:
     runs-on: ubuntu-latest
@@ -522,51 +468,47 @@ jobs:
     needs:
       - prepare-release
       - build-firmware
-      - build-universal-bundle
 
     if: ${{ needs.prepare-release.outputs.publish == 'true' }}
 
     steps:
 
       #
-      # Checkout the repository for commit information.
+      # Download ONLY the Brick bundle.
       #
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-
-      #
-      # Download ONLY bundle artifacts from all successful jobs.
-      #
-      # merge-multiple puts all ZIP files into ./release-assets
-      #
-      - name: Download completed bundle artifacts
+      - name: Download Brick bundle
         uses: actions/download-artifact@v7
         with:
-          pattern: rusefi_bundle_*.zip
+          name: rusefi_bundle_brick.zip
           path: ./release-assets
-          merge-multiple: true
 
 
       #
-      # Show exactly what we're about to publish.
+      # Verify the exact file exists.
       #
-      - name: List release assets
+      - name: Verify Brick bundle
+        shell: bash
         run: |
           echo "Release assets:"
-          find ./release-assets -maxdepth 2 -type f -print | sort
+          find ./release-assets -maxdepth 2 -type f -print
+
+          test -f ./release-assets/rusefi_bundle_brick.zip
 
 
       #
-      # Create a release from the COMPLETED build artifacts.
+      # Create the GitHub Release.
       #
-      - name: Create GitHub Release
+      - name: Create Brick GitHub Release
         uses: ncipollo/release-action@v1.21.0
         with:
           tag: ${{ needs.prepare-release.outputs.tag }}
           name: ${{ needs.prepare-release.outputs.name }}
-          artifacts: "./release-assets/*.zip"
+
+          #
+          # ONLY Brick.
+          #
+          artifacts: "./release-assets/rusefi_bundle_brick.zip"
+
           replacesArtifacts: true
           token: ${{ secrets.GITHUB_TOKEN }}
           allowUpdates: true
