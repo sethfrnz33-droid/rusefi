@@ -1,0 +1,49 @@
+name: Brick ECU - sync upstream rusEFI
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 10 * * 1'
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: brick-upstream-sync
+  cancel-in-progress: false
+jobs:
+  merge-upstream:
+    if: github.repository == 'sethfrnz33-droid/rusefi'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Merge original rusEFI into master and Brick board
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Brick ECU upstream sync"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/rusefi/rusefi.git
+          git fetch --no-tags upstream master
+          git fetch --no-tags origin master brick/mini-brick
+          git switch master
+          BEFORE="$(git rev-parse HEAD)"
+          git merge --no-edit upstream/master -m "Sync upstream rusEFI [skip ci]"
+          git push origin master
+          git switch -C brick/mini-brick origin/brick/mini-brick
+          BOARD_BEFORE="$(git rev-parse HEAD)"
+          git merge --no-edit master -m "Merge rusEFI updates into Mini Brick [skip ci]"
+          git push origin brick/mini-brick
+          if [ "$BOARD_BEFORE" != "$(git rev-parse HEAD)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build merged Mini Brick firmware
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run mini-brick-firmware.yml --ref brick/mini-brick

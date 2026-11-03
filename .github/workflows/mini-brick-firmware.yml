@@ -1,0 +1,65 @@
+name: Brick ECU - Mini Brick F407 firmware
+on:
+  push:
+    branches: ['brick/mini-brick']
+    paths:
+      - 'firmware/config/boards/mini_brick/**'
+      - 'firmware/hw_layer/drivers/gpio/tle8888.cpp'
+      - '.github/workflows/mini-brick-firmware.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: mini-brick-firmware-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.repository == 'sethfrnz33-droid/rusefi' && github.ref == 'refs/heads/brick/mini-brick'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Set up rusEFI submodules
+        uses: ./.github/actions/submodule-init
+        with:
+          token: ${{ secrets.MY_REPO_PAT || github.token }}
+      - name: Set up Java
+        uses: ./.github/actions/setup-java
+      - name: Install ARM GNU toolchain
+        uses: carlosperate/arm-none-eabi-gcc-action@v1.14.1
+        with:
+          release: '14.2.Rel1'
+      - name: Install build dependencies
+        run: |
+          sudo bash misc/actions/add-ubuntu-latest-apt-mirrors.sh
+          sudo bash misc/actions/ubuntu-install-tools.sh
+      - name: Generate firmware configuration
+        working-directory: firmware
+        run: |
+          bash bin/compile.sh config/boards/mini_brick/meta-info-mini_brick_f4.env docs-enums
+          bash bin/compile.sh config/boards/mini_brick/meta-info-mini_brick_f4.env config
+      - name: Compile firmware and bundles
+        working-directory: firmware
+        run: bash bin/compile.sh config/boards/mini_brick/meta-info-mini_brick_f4.env build_both_bundles --output-sync=recurse
+      - name: Verify firmware bundle
+        run: |
+          test -s artifacts/rusefi_bundle_mini_brick_f4.zip
+          unzip -t artifacts/rusefi_bundle_mini_brick_f4.zip | tail -n 3
+      - name: Archive firmware for CI
+        uses: actions/upload-artifact@v4
+        with:
+          name: mini-brick-f4-${{ github.sha }}
+          path: artifacts/rusefi_bundle_mini_brick_f4.zip
+          if-no-files-found: error
+      - name: Publish experimental release after successful build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="mini-brick-${GITHUB_SHA:0:12}"
+          gh release create "$tag" artifacts/rusefi_bundle_mini_brick_f4.zip \
+            --title "Mini Brick F407 experimental ${GITHUB_SHA:0:12}" \
+            --notes "Automated build from brick/mini-brick. Upstream-derived firmware for STM32F407/MRE hardware. NOT BENCH-VALIDATED for Mini Brick production hardware; verify all I/O mapping, output polarity, power, watchdog, and flash compatibility before connecting an engine. Commit: ${GITHUB_SHA}" \
+            --prerelease --target "${GITHUB_SHA}"
