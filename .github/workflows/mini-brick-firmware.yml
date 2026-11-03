@@ -2,10 +2,6 @@ name: Brick ECU - Mini Brick F407 firmware
 on:
   push:
     branches: ['brick/mini-brick']
-    paths:
-      - 'firmware/config/boards/mini_brick/**'
-      - 'firmware/hw_layer/drivers/gpio/tle8888.cpp'
-      - '.github/workflows/mini-brick-firmware.yml'
   workflow_dispatch:
 permissions:
   contents: write
